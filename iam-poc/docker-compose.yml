@@ -1,0 +1,243 @@
+services:
+  # 1. Database
+  postgres:
+    image: postgres:16
+    container_name: iam-postgres
+    platform: linux/amd64
+    environment:
+      - POSTGRES_DB=iam_database
+      - POSTGRES_USER=iam_user
+      - POSTGRES_PASSWORD=secretpassword
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iam_user -d iam_database"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - iam-network
+
+# 2. midPoint Schema Initialization Engine
+  data_init:
+    image: evolveum/midpoint:latest
+    container_name: iam-data-init
+    command: >
+      bash -c "
+        echo 'Waiting for PostgreSQL database...' ;
+        cd /opt/midpoint ;
+        bin/midpoint.sh init-native ;
+        bin/ninja.sh run-sql --create --mode REPOSITORY || true ;
+        bin/ninja.sh run-sql --create --mode AUDIT || true ;
+      "
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - MP_SET_midpoint_repository_jdbcUsername=iam_user
+      - MP_SET_midpoint_repository_jdbcPassword=secretpassword
+      - MP_SET_midpoint_repository_jdbcUrl=jdbc:postgresql://postgres:5432/iam_database
+      - MP_SET_midpoint_repository_database=postgresql
+      - MP_INIT_CFG=/opt/midpoint/var
+    volumes:
+      - midpoint_home:/opt/midpoint/var
+    networks:
+      - iam-network
+
+  # 3. Identity Governance (midPoint)
+  midpoint:
+    image: evolveum/midpoint:latest
+    container_name: iam-midpoint
+    command: [ "/opt/midpoint/bin/midpoint.sh", "container" ]
+    depends_on:
+      data_init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    environment:
+      - MP_SET_midpoint_repository_jdbcUsername=iam_user
+      - MP_SET_midpoint_repository_jdbcPassword=secretpassword
+      - MP_SET_midpoint_repository_jdbcUrl=jdbc:postgresql://postgres:5432/iam_database
+      - MP_SET_midpoint_repository_database=postgresql
+      - MP_NO_ENV_COMPAT=1
+    volumes:
+      - midpoint_home:/opt/midpoint/var
+    networks:
+      - iam-network
+
+  # 4. Identity Provider (Keycloak)
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: iam-keycloak
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/iam_database
+      KC_DB_USERNAME: iam_user
+      KC_DB_PASSWORD: secretpassword
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    command: start-dev --import-realm
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/keycloak-realm.json:/opt/keycloak/data/import/realm.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - iam-network
+
+  # 5. Local Email Tester (Mailpit)
+  mailpit:
+    image: axllent/mailpit
+    container_name: iam-mailpit
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - iam-network
+
+  # 6. Python Discord ChatOps Bot
+  discord-bot:
+    image: python:3.10-slim
+    container_name: iam-discord-bot
+    volumes:
+      - ./bot:/app
+    working_dir: /app
+    command: bash -c "pip install discord.py psycopg2-binary && python bot.py"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - iam-network
+
+  # 7. Self-Hosted Version Control (Gitea)
+  gitea:
+    image: gitea/gitea:latest
+    container_name: iam-gitea
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA__database__DB_TYPE=postgres
+      - GITEA__database__HOST=postgres:5432
+      - GITEA__database__NAME=iam_database
+      - GITEA__database__USER=iam_user
+      - GITEA__database__PASSWD=secretpassword
+      - GITEA__server__ROOT_URL=http://localhost:3000/
+      - GITEA__server__RUN_USER=git
+      - GITEA__security__INSTALL_LOCK=true
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - iam-network
+
+# MongoDB Database
+  mongo:
+    image: mongo:8.0
+    container_name: iam-mongo
+    restart: always
+    command: mongod --oplogSize 128 --replSet rs0
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iam-network
+
+  # Replica Set Initializer
+  mongo-init:
+    image: mongo:8.0
+    container_name: iam-mongo-init
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: >
+      bash -c "mongosh --host mongo:27017 --eval 'try { rs.initiate({_id: \"rs0\", members: [{_id: 0, host: \"mongo:27017\"}]}) } catch(e) {}'"
+    networks:
+      - iam-network
+
+  # Rocket.Chat Service
+  rocketchat:
+    image: registry.rocket.chat/rocketchat/rocket.chat:latest
+    container_name: iam-rocketchat
+    restart: unless-stopped
+    environment:
+      - MONGO_URL=mongodb://mongo:27017/rocketchat?replicaSet=rs0&directConnection=true
+      - MONGO_OPLOG_URL=mongodb://mongo:27017/local?replicaSet=rs0&directConnection=true
+      - ROOT_URL=http://localhost:4000
+      - PORT=4000
+      # 1. Bypass the UI Setup Wizard
+      - OVERWRITE_SETTING_Show_Setup_Wizard=completed
+      # 2. Automatically Create Initial Admin User
+      - INITIAL_USER=yes
+      - ADMIN_USERNAME=admin
+      - ADMIN_NAME=Admin User
+      - ADMIN_EMAIL=admin@company.local
+      - ADMIN_PASS=AdminPassword123!
+      # 3. Pre-Configure Keycloak OIDC SSO
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak=true
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_url=http://keycloak:8080
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_authorize_path=/realms/master/protocol/openid-connect/auth
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_token_path=/realms/master/protocol/openid-connect/token
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_identity_path=/realms/master/protocol/openid-connect/userinfo
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_id=rocketchat
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_secret=rocketchat-secret-123
+      - OVERWRITE_SETTING_Accounts_OAuth_Custom_keycloak_button_label_text=Keycloak
+      # Dummy mail url
+      - MAIL_URL=smtp://localhost:25
+    ports:
+      - "4000:4000"
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    networks:
+      - iam-network
+
+  # 8-ish. Node.js Automated Trade Pipeline Bot
+  trade-bot:
+    image: node:20-slim
+    container_name: iam-trade-bot
+    volumes:
+      - ./trade-bot:/app
+    working_dir: /app
+    command: bash -c "apt-get update && apt-get install -y python3 curl && npm install && node index.js"
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=iam_database
+      - POSTGRES_USER=iam_user
+      - POSTGRES_PASSWORD=secretpassword
+      - ROCKETCHAT_URL=http://rocketchat:4000
+      - GITEA_URL=http://gitea:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rocketchat:
+        condition: service_started
+      gitea:
+        condition: service_started
+    networks:
+      - iam-network
+
+volumes:
+  postgres_data:
+  midpoint_home:
+  mongo_data:
+
+networks:
+  iam-network:
+    driver: bridge
+
