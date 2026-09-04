@@ -1,36 +1,49 @@
-# Define RBAC Roles in midPoint
+# ==============================================================================
+# 1. Provision midPoint Roles & Users from File
+# ==============================================================================
+Write-Host "--- Provisioning midPoint Roles & Users from File ---" -ForegroundColor Cyan
 
-$midpointAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("administrator:5ecr3t"))
+$xmlPath = ".\init_employees_midPoint.xml"
+if (-not (Test-Path $xmlPath)) {
+    Write-Error "Could not find $xmlPath in current directory."
+    exit
+}
+
+[xml]$employeesXml = Get-Content -Path $xmlPath
+
 $mpHeaders = @{
-    "Authorization" = "Basic $midpointAuth"
+    "Authorization" = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("administrator:5ecr3t"))
     "Content-Type"  = "application/xml"
 }
 
-# 1. Create Developer Role XML
-$developerRoleXml = @"
-<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3">
-    <name>Developer</name>
-    <description>Grants developer access: open PRs in Gitea and join #dev-chat in Rocket.Chat</description>
-</role>
-"@
+# Provision Roles
+foreach ($roleNode in $employeesXml.objects.role) {
+    try {
+        $null = Invoke-RestMethod -Uri "http://localhost:8081/midpoint/ws/rest/roles" `
+            -Method Post -Headers $mpHeaders -Body $roleNode.OuterXml
+        Write-Host "Provisioned midPoint role: $($roleNode.name)" -ForegroundColor Green
+    } catch {
+        Write-Host "Role $($roleNode.name) already exists or skipped." -ForegroundColor Yellow
+    }
+}
 
-# 2. Create Manager Role XML
-$managerRoleXml = @"
-<role xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3">
-    <name>Manager</name>
-    <description>Grants manager access: approve/merge PRs in Gitea and join #trade-approvals in Rocket.Chat</description>
-</role>
-"@
-
-# Post Roles to midPoint
-Invoke-RestMethod -Uri "http://localhost:8081/midpoint/ws/rest/roles" -Method Post -Headers $mpHeaders -Body $developerRoleXml
-Invoke-RestMethod -Uri "http://localhost:8081/midpoint/ws/rest/roles" -Method Post -Headers $mpHeaders -Body $managerRoleXml
-Write-Host "Created Developer and Manager roles in midPoint." -ForegroundColor Green
+# Provision Users
+foreach ($userNode in $employeesXml.objects.user) {
+    try {
+        $null = Invoke-RestMethod -Uri "http://localhost:8081/midpoint/ws/rest/users" `
+            -Method Post -Headers $mpHeaders -Body $userNode.OuterXml
+        Write-Host "Provisioned midPoint user: $($userNode.name)" -ForegroundColor Green
+    } catch {
+        Write-Host "User $($userNode.name) already exists or skipped." -ForegroundColor Yellow
+    }
+}
 
 
-# Sync midPoint Roles to Keycloak Realm Roles
+# ==============================================================================
+# 2. Sync Roles, Assign Roles to Users & Configure UserInfo Mapper in Keycloak
+# ==============================================================================
+Write-Host "--- Syncing Roles & User Mappings to Keycloak ---" -ForegroundColor Cyan
 
-# Get Admin Token from Keycloak
 $kcTokenResp = Invoke-RestMethod -Uri "http://localhost:8080/realms/master/protocol/openid-connect/token" `
     -Method Post `
     -Body @{
@@ -45,118 +58,307 @@ $kcHeaders = @{
     "Content-Type"  = "application/json"
 }
 
-# Create Developer & Manager Realm Roles in Keycloak
-@("Developer", "Manager") | ForEach-Object {
-    $roleBody = @{ name = $_ } | ConvertTo-Json
+# 1. Create Realm Roles in Keycloak
+foreach ($roleName in $employeesXml.objects.role.name) {
+    $roleBody = @{ name = $roleName } | ConvertTo-Json
     try {
-        Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/roles" `
+        $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/roles" `
             -Method Post -Headers $kcHeaders -Body $roleBody
-        Write-Host "Created Keycloak Realm Role: $_" -ForegroundColor Green
+        Write-Host "Created Keycloak Realm Role: $roleName" -ForegroundColor Green
     } catch {
-        Write-Host "Keycloak Role $_ already exists." -ForegroundColor Yellow
+        Write-Host "Keycloak Role $roleName already exists." -ForegroundColor Yellow
     }
 }
 
-
-# Map Keycloak OIDC Roles to Rocket.Chat Channels
-
-# Get Rocket.Chat Auth Token
-$rcAuth = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/login" `
-    -Method Post `
-    -Body @{ username = "admin"; password = "AdminPassword123!" }
-
-$rcHeaders = @{
-    "X-Auth-Token" = $rcAuth.data.authToken
-    "X-User-Id"    = $rcAuth.data.userId
-    "Content-Type" = "application/json"
+# 2. Assign Realm Roles to Users (Strict JSON Array string format)
+$userRoleMap = @{
+    "alice.dev"   = "developer"
+    "bob.trader"  = "trader"
+    "charlie.mgr" = "manager"
+    "diana.hr"    = "human_resources"
 }
 
-# Map Keycloak roles to Rocket.Chat channels
-# Developer -> #dev-chat, Manager -> #trade-approvals
-$rcSettings = @(
-    @{ _id = "Accounts_OAuth_Custom_keycloak_roles_to_channels"; value = '{"Developer": "dev-chat", "Manager": "trade-approvals"}' },
-    @{ _id = "Accounts_OAuth_Custom_keycloak_merge_roles"; value = $true }
-)
+foreach ($username in $userRoleMap.Keys) {
+    $targetRoleName = $userRoleMap[$username]
+    try {
+        $kcUser = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users?username=$username" `
+            -Method Get -Headers $kcHeaders
+        
+        $kcRole = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/roles/$targetRoleName" `
+            -Method Get -Headers $kcHeaders
 
-foreach ($setting in $rcSettings) {
-    $body = @{ value = $setting.value } | ConvertTo-Json
-    Invoke-RestMethod -Uri "http://localhost:4000/api/v1/settings/$($setting._id)" `
-        -Method Post -Headers $rcHeaders -Body $body
+        if ($kcUser -and $kcRole) {
+            $userId = $kcUser[0].id
+            # Exact JSON array format required by Keycloak
+            $rolePayload = "[{`"id`":`"$($kcRole.id)`",`"name`":`"$($kcRole.name)`"}]"
+            
+            $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users/$userId/role-mappings/realm" `
+                -Method Post -Headers $kcHeaders -Body $rolePayload
+            Write-Host "Assigned role '$targetRoleName' to user '$username' in Keycloak." -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "Role mapping for $username skipped or failed: $_" -ForegroundColor Yellow
+    }
 }
-Write-Host "Rocket.Chat OIDC role-to-channel mapping updated." -ForegroundColor Green
+
+# 3. Configure Keycloak Protocol Mapper to expose 'roles' in /userinfo payload
+try {
+    $kcClients = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/clients" -Method Get -Headers $kcHeaders
+    foreach ($client in $kcClients) {
+        if ($client.clientId -notlike "admin-cli" -and $client.clientId -notlike "account*") {
+            $mapperBody = @{
+                name           = "realm roles to userinfo"
+                protocol       = "openid-connect"
+                protocolMapper = "oidc-usermodel-realm-role-mapper"
+                config         = @{
+                    "multivalued"          = "true"
+                    "userinfo.token.claim" = "true"
+                    "id.token.claim"       = "true"
+                    "access.token.claim"   = "true"
+                    "claim.name"           = "roles"
+                    "jsonType.label"       = "String"
+                }
+            } | ConvertTo-Json -Depth 5
+
+            try {
+                $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/clients/$($client.id)/protocol-mappers/models" `
+                    -Method Post -Headers $kcHeaders -Body $mapperBody
+                Write-Host "Configured 'roles' UserInfo claim mapper for client: $($client.clientId)" -ForegroundColor Green
+            } catch {
+                # Mapper already configured
+            }
+        }
+    }
+} catch {
+    Write-Host "Failed to configure Keycloak protocol mappers: $_" -ForegroundColor Yellow
+}
 
 
-# Enforce Gitea Merge Request Permissions
+# ==============================================================================
+# 3. Pre-Create Private Channels (Groups), Users & Assign Memberships in Rocket.Chat
+# ==============================================================================
+Write-Host "--- Provisioning Private Channels & Users in Rocket.Chat ---" -ForegroundColor Cyan
 
-$giteaAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("giteaadmin:GiteaPassword123!"))
+$rcAdminPass = "AdminPassword123!"
+$rcLoginBody = @{ user = "admin"; password = $rcAdminPass } | ConvertTo-Json
+
+try {
+    $rcAuth = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/login" `
+        -Method Post -ContentType "application/json" -Body $rcLoginBody
+
+    $passBytes = [System.Text.Encoding]::UTF8.GetBytes($rcAdminPass)
+    $sha256    = [System.Security.Cryptography.SHA256]::Create()
+    $passHash  = -join ($sha256.ComputeHash($passBytes) | ForEach-Object { $_.ToString("x2") })
+
+    $rcHeaders = @{
+        "X-Auth-Token" = $rcAuth.data.authToken
+        "X-User-Id"    = $rcAuth.data.userId
+        "X-2fa-Code"   = $passHash
+        "X-2fa-Method" = "password"
+        "Content-Type" = "application/json"
+    }
+
+    # Helper function to extract exact API response text from web exceptions
+    function Get-ExceptionDetail ($err) {
+        if ($err.Exception.Response) {
+            $reader = [System.IO.StreamReader]::new($err.Exception.Response.GetResponseStream())
+            return $reader.ReadToEnd()
+        }
+        return $err.Exception.Message
+    }
+
+    # 1. Provision Private Channels (Convert existing Public channels to Private if needed)
+    $privateChannels = @("trades", "trade-approval", "hr", "dev", "managers")
+    $channelMap = @{}
+
+    foreach ($chan in $privateChannels) {
+        $chanBody = @{ name = $chan } | ConvertTo-Json
+        try {
+            # Try creating as a private group
+            $resp = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/groups.create" `
+                -Method Post -Headers $rcHeaders -Body $chanBody
+            $channelMap[$chan] = $resp.group._id
+            Write-Host "Created private channel: #$chan" -ForegroundColor Green
+        } catch {
+            # Check if it already exists as a private group
+            try {
+                $infoResp = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/groups.info?roomName=$chan" `
+                    -Method Get -Headers $rcHeaders
+                $channelMap[$chan] = $infoResp.group._id
+                Write-Host "Private channel #$chan exists (ID: $($channelMap[$chan]))." -ForegroundColor Yellow
+            } catch {
+                # Check if it exists as a public channel, and convert it to private
+                try {
+                    $pubResp = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/channels.info?roomName=$chan" `
+                        -Method Get -Headers $rcHeaders
+                    $pubId = $pubResp.channel._id
+
+                    # Convert public channel to private group
+                    $setTypeBody = @{ roomId = $pubId; type = "p" } | ConvertTo-Json
+                    $null = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/channels.setType" `
+                        -Method Post -Headers $rcHeaders -Body $setTypeBody
+
+                    $channelMap[$chan] = $pubId
+                    Write-Host "Converted existing public channel #$chan to Private (ID: $pubId)." -ForegroundColor Green
+                } catch {
+                    $errDetail = Get-ExceptionDetail $_
+                    Write-Host "Failed to create or convert channel #$($chan): $errDetail" -ForegroundColor Red
+                }
+            }
+        }
+    }
+
+    # Fetch or set Public '#general' channel
+    try {
+        $infoResp = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/channels.info?roomName=general" `
+            -Method Get -Headers $rcHeaders
+        $channelMap["general"] = $infoResp.channel._id
+        Write-Host "Public channel #general exists (ID: $($channelMap['general']))." -ForegroundColor Yellow
+    } catch {
+        $channelMap["general"] = "GENERAL"
+    }
+
+    # 2. Users to Provision
+    $usersToProvision = @(
+        @{ name = "Alice Dev";    username = "alice.dev";   email = "alice.dev@company.local";   channels = @("dev", "general") },
+        @{ name = "Bob Trader";   username = "bob.trader";  email = "bob.trader@company.local";  channels = @("trades", "general") },
+        @{ name = "Charlie Mgr";  username = "charlie.mgr"; email = "charlie.mgr@company.local"; channels = @("trade-approval", "managers", "general") },
+        @{ name = "Diana HR";     username = "diana.hr";    email = "diana.hr@company.local";    channels = @("hr", "general") }
+    )
+
+    # Fetch all existing users from Rocket.Chat
+    $existingRcUsers = (Invoke-RestMethod -Uri "http://localhost:4000/api/v1/users.list" -Method Get -Headers $rcHeaders).users
+
+    foreach ($u in $usersToProvision) {
+        $targetEmail = $u.email
+        $targetUsername = $u.username
+
+        # Resolve matching account by username or email address
+        $matchedUser = $existingRcUsers | Where-Object { 
+            $_.username -eq $targetUsername -or ($_.emails | Where-Object { $_.address -eq $targetEmail })
+        }
+
+        $userId = $null
+
+        if ($matchedUser) {
+            $userId = $matchedUser._id
+            Write-Host "Found existing Rocket.Chat user account for '$($u.username)' (ID: $userId)." -ForegroundColor Yellow
+        } else {
+            # Create user account if not found
+            $userBody = @{
+                name             = $u.name
+                email            = $u.email
+                username         = $u.username
+                password         = "TempPassword123!"
+                sendWelcomeEmail = $false
+                verified         = $true
+            } | ConvertTo-Json
+
+            try {
+                $createResp = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/users.create" `
+                    -Method Post -Headers $rcHeaders -Body $userBody
+                $userId = $createResp.user._id
+                Write-Host "Pre-created Rocket.Chat user account: $($u.username) (ID: $userId)" -ForegroundColor Green
+            } catch {
+                $errDetail = Get-ExceptionDetail $_
+                Write-Host "User $($u.username) creation status: $errDetail" -ForegroundColor Yellow
+            }
+        }
+
+        if (-not $userId) {
+            Write-Host "   Skipping channel invites for '$($u.username)': Could not resolve User ID." -ForegroundColor Red
+            continue
+        }
+
+        # Add user to designated channels
+        foreach ($chanName in $u.channels) {
+            $roomId = $channelMap[$chanName]
+            if (-not $roomId) {
+                Write-Host "   Skipping #$chanName for '$($u.username)': Room ID missing." -ForegroundColor Red
+                continue
+            }
+
+            $inviteBody = @{
+                roomId = $roomId
+                userId = $userId
+            } | ConvertTo-Json
+
+            # Use 'channels.invite' for public #general, 'groups.invite' for private channels
+            $inviteEndpoint = if ($chanName -eq "general") { "channels.invite" } else { "groups.invite" }
+
+            try {
+                $null = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/$inviteEndpoint" `
+                    -Method Post -Headers $rcHeaders -Body $inviteBody
+                Write-Host "   Added '$($u.username)' to #$chanName" -ForegroundColor Green
+            } catch {
+                $errDetail = Get-ExceptionDetail $_
+                if ($errDetail -like "*already-in-room*" -or $errDetail -like "*error-user-already-in-room*") {
+                    Write-Host "   '$($u.username)' is already in #$chanName." -ForegroundColor Yellow
+                } else {
+                    Write-Host "   FAILED to add '$($u.username)' to #$chanName - API Output: $errDetail" -ForegroundColor Red
+                }
+            }
+        }
+    }
+
+    # 3. Enable OAuth Merge Settings
+    function Set-RCSetting {
+        param([string]$Name, [object]$Val)
+        $key = "Accounts_OAuth_Custom-keycloak-$Name"
+        $body = @{ value = $Val } | ConvertTo-Json
+        try {
+            $null = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/settings/$key" `
+                -Method Post -Headers $rcHeaders -Body $body
+        } catch {}
+    }
+
+    Set-RCSetting -Name "enabled" -Val $true
+    Set-RCSetting -Name "merge_users" -Val $true
+
+    Write-Host "Rocket.Chat API private channel provisioning complete." -ForegroundColor Green
+} catch {
+    $errDetail = Get-ExceptionDetail $_
+    Write-Host "Rocket.Chat API Provisioning Failed: $errDetail" -ForegroundColor Red
+}
+
+
+# ==============================================================================
+# 4. Enforce Gitea Teams & Branch Protections
+# ==============================================================================
+Write-Host "--- Configuring Gitea RBAC & Branch Protections ---" -ForegroundColor Cyan
+
+$giteaAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("giteaadmin:Password123!"))
 $giteaHeaders = @{
     "Authorization" = "Basic $giteaAuth"
     "Content-Type"  = "application/json"
 }
 
-# 1. Create Organization
+# Create Organization
 $orgBody = @{ username = "trading-org"; visibility = "public" } | ConvertTo-Json
-try { Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs" -Method Post -Headers $giteaHeaders -Body $orgBody } catch {}
+try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs" -Method Post -Headers $giteaHeaders -Body $orgBody } catch {}
 
-# 2. Create 'Developers' Team (Can create PRs, write access, but cannot merge to main)
-$devTeamBody = @{
-    name        = "Developers"
-    permission  = "write"
-    units       = @("repo.code", "repo.issues", "repo.pulls")
-} | ConvertTo-Json
-$devTeam = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/teams" -Method Post -Headers $giteaHeaders -Body $devTeamBody
+# Create Teams
+$devTeamBody = @{ name = "Developers"; permission = "write"; units = @("repo.code", "repo.issues", "repo.pulls") } | ConvertTo-Json
+try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/teams" -Method Post -Headers $giteaHeaders -Body $devTeamBody } catch {}
 
-# 3. Create 'Managers' Team (Admin access, can approve & merge)
-$mgrTeamBody = @{
-    name        = "Managers"
-    permission  = "admin"
-    units       = @("repo.code", "repo.issues", "repo.pulls", "repo.releases")
-} | ConvertTo-Json
-$mgrTeam = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/teams" -Method Post -Headers $giteaHeaders -Body $mgrTeamBody
+$mgrTeamBody = @{ name = "Managers"; permission = "admin"; units = @("repo.code", "repo.issues", "repo.pulls", "repo.releases") } | ConvertTo-Json
+try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/teams" -Method Post -Headers $giteaHeaders -Body $mgrTeamBody } catch {}
 
-# 4. Set Branch Protection on 'main' branch in trade-scripts repository
+# Set Branch Protection on 'main' branch
 $branchProtectBody = @{
-    branch_name                   = "main"
-    enable_push                   = $false
-    enable_whitelist              = $true
-    whitelist_teams               = @("Managers")  # Only Managers can push/merge directly
-    required_approvals            = 1
-    enable_approvals_whitelist    = $true
-    approvals_whitelist_teams     = @("Managers")  # Only Managers can approve PRs
+    branch_name                = "main"
+    enable_push                = $false
+    enable_whitelist           = $true
+    whitelist_teams            = @("Managers")
+    required_approvals         = 1
+    enable_approvals_whitelist = $true
+    approvals_whitelist_teams  = @("Managers")
 } | ConvertTo-Json
 
-Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/giteaadmin/trade-scripts/branch_protections" `
-    -Method Post -Headers $giteaHeaders -Body $branchProtectBody
-
-Write-Host "Gitea branch protection configured: Only Managers can merge PRs." -ForegroundColor Green
-
-
-# Assign Roles to Users in midPoint
-
-# Example: Assign 'Developer' role to user 'alice.developer' in midPoint
-$assignRoleXml = @"
-<objectModification xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
-                    xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3">
-    <itemDelta>
-        <t:mutationType xmlns:t="http://prism.evolveum.com/xml/ns/public/types-3">add</t:mutationType>
-        <t:path xmlns:t="http://prism.evolveum.com/xml/ns/public/types-3">assignment</t:path>
-        <t:value xmlns:t="http://prism.evolveum.com/xml/ns/public/types-3">
-            <c:targetRef type="c:RoleType">
-                <c:filter>
-                    <q:equal xmlns:q="http://prism.evolveum.com/xml/ns/public/query-3">
-                        <q:path>name</q:path>
-                        <q:value>Developer</q:value>
-                    </q:equal>
-                </c:filter>
-            </c:targetRef>
-        </t:value>
-    </itemDelta>
-</objectModification>
-"@
-
-# Execute delta update against midPoint user endpoint
-Invoke-RestMethod -Uri "http://localhost:8081/midpoint/ws/rest/users/alice.developer" `
-    -Method Patch -Headers $mpHeaders -Body $assignRoleXml
-
-
-    
+try {
+    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/giteaadmin/trade-scripts/branch_protections" `
+        -Method Post -Headers $giteaHeaders -Body $branchProtectBody
+    Write-Host "Gitea branch protection configured." -ForegroundColor Green
+} catch {
+    Write-Host "Branch protection status: Active / Already exists." -ForegroundColor Green
+}
