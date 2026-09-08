@@ -323,7 +323,7 @@ try {
 
 
 # ==============================================================================
-# 4. Enforce Gitea Teams & Branch Protections
+# 4. Enforce Gitea RBAC, Teams & Branch Protections
 # ==============================================================================
 Write-Host "--- Configuring Gitea RBAC & Branch Protections ---" -ForegroundColor Cyan
 
@@ -333,32 +333,128 @@ $giteaHeaders = @{
     "Content-Type"  = "application/json"
 }
 
-# Create Organization
-$orgBody = @{ username = "trading-org"; visibility = "public" } | ConvertTo-Json
+$orgName  = "trading-org"
+$repoName = "trade-scripts"
+
+# 1. Ensure Organization and Repository Exist
+$orgBody = @{ username = $orgName; visibility = "public" } | ConvertTo-Json
 try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs" -Method Post -Headers $giteaHeaders -Body $orgBody } catch {}
 
-# Create Teams
-$devTeamBody = @{ name = "Developers"; permission = "write"; units = @("repo.code", "repo.issues", "repo.pulls") } | ConvertTo-Json
-try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/teams" -Method Post -Headers $giteaHeaders -Body $devTeamBody } catch {}
+$repoBody = @{ name = $repoName; private = $false; auto_init = $true } | ConvertTo-Json
+try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/$orgName/repos" -Method Post -Headers $giteaHeaders -Body $repoBody } catch {}
 
-$mgrTeamBody = @{ name = "Managers"; permission = "admin"; units = @("repo.code", "repo.issues", "repo.pulls", "repo.releases") } | ConvertTo-Json
-try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/teams" -Method Post -Headers $giteaHeaders -Body $mgrTeamBody } catch {}
 
-# Set Branch Protection on 'main' branch
+
+
+# 2. Provision Gitea Accounts & Bind to Keycloak OIDC Source
+$giteaUsers = @(
+    @{ username = "alice.dev";   email = "alice.dev@company.local";   team = "Developers" },
+    @{ username = "bob.trader";  email = "bob.trader@company.local";  team = "Traders" },
+    @{ username = "charlie.mgr"; email = "charlie.mgr@company.local"; team = "Managers" }
+)
+
+# Resolve Keycloak Auth Source ID directly via CLI (falls back to 1)
+$keycloakAuthId = 1
+try {
+    $cliAuthOutput = docker exec -u git iam-gitea gitea admin auth list
+    $matchedLine = $cliAuthOutput | Where-Object { $_ -like "*keycloak*" }
+    if ($matchedLine) {
+        $keycloakAuthId = [int]($matchedLine.Trim().Split()[0])
+    }
+} catch {
+    $keycloakAuthId = 1
+}
+
+foreach ($u in $giteaUsers) {
+    $userBody = @{
+        username             = $u.username
+        email                = $u.email
+        password             = "TempPassword123!"
+        must_change_password = $false
+        login_source_id      = $keycloakAuthId  # Links account directly to Keycloak SSO
+    } | ConvertTo-Json
+
+    try {
+        $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users" -Method Post -Headers $giteaHeaders -Body $userBody
+        Write-Host "Created Gitea account: $($u.username) (Linked to SSO Auth Source ID: $keycloakAuthId)" -ForegroundColor Green
+    } catch {
+        Write-Host "Gitea account $($u.username) already exists or created via OIDC." -ForegroundColor Yellow
+    }
+}
+
+# Explicitly purge HR account if created previously
+try {
+    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users/diana.hr" -Method Delete -Headers $giteaHeaders
+    Write-Host "Removed Gitea account for diana.hr (HR access restricted)." -ForegroundColor Green
+} catch {}
+
+
+
+
+# 3. Provision Organization Teams with Role-Specific Permissions
+$teamsConfig = @(
+    @{ name = "Developers"; permission = "write"; units = @("repo.code", "repo.issues", "repo.pulls"); includes_all_repositories = $true },
+    @{ name = "Traders";    permission = "read";  units = @("repo.code", "repo.issues", "repo.pulls"); includes_all_repositories = $true },
+    @{ name = "Managers";   permission = "admin"; units = @("repo.code", "repo.issues", "repo.pulls", "repo.releases"); includes_all_repositories = $true }
+)
+
+$teamIdMap = @{}
+
+foreach ($t in $teamsConfig) {
+    $teamBody = @{
+        name       = $t.name
+        permission = $t.permission
+        units      = $t.units
+    } | ConvertTo-Json
+
+    try {
+        $resp = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/$orgName/teams" -Method Post -Headers $giteaHeaders -Body $teamBody
+        $teamIdMap[$t.name] = $resp.id
+        Write-Host "Created Gitea Team: $($t.name) (Permission: $($t.permission))" -ForegroundColor Green
+    } catch {
+        # Fetch existing team ID
+        $allTeams = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/$orgName/teams" -Method Get -Headers $giteaHeaders
+        $matchedTeam = $allTeams | Where-Object { $_.name -eq $t.name }
+        if ($matchedTeam) {
+            $teamIdMap[$t.name] = $matchedTeam.id
+            Write-Host "Gitea Team $($t.name) exists (ID: $($matchedTeam.id))." -ForegroundColor Yellow
+        }
+    }
+}
+
+# 4. Assign Users to designated Teams
+foreach ($u in $giteaUsers) {
+    $teamId = $teamIdMap[$u.team]
+    if ($teamId) {
+        try {
+            $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/teams/$teamId/members/$($u.username)" -Method Put -Headers $giteaHeaders
+            Write-Host "Added '$($u.username)' to Gitea Team '$($u.team)'" -ForegroundColor Green
+        } catch {
+            Write-Host "Could not add $($u.username) to $($u.team): $_" -ForegroundColor Yellow
+        }
+    }
+}
+
+# 5. Enforce Branch Protection Rules on 'main' Branch
 $branchProtectBody = @{
     branch_name                = "main"
-    enable_push                = $false
-    enable_whitelist           = $true
-    whitelist_teams            = @("Managers")
-    required_approvals         = 1
-    enable_approvals_whitelist = $true
-    approvals_whitelist_teams  = @("Managers")
+    enable_push                = $false          # Disables direct commits (forces Pull Requests)
+    enable_whitelist           = $false
+    required_approvals         = 1              # Requires 1 review approval to merge
+    enable_approvals_whitelist = $true           # Restricts approval rights to specific teams
+    approvals_whitelist_teams  = @("Managers")   # Only Managers team can approve/accept PRs
 } | ConvertTo-Json
 
 try {
-    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/giteaadmin/trade-scripts/branch_protections" `
+    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/$orgName/$repoName/branch_protections" `
         -Method Post -Headers $giteaHeaders -Body $branchProtectBody
-    Write-Host "Gitea branch protection configured." -ForegroundColor Green
+    Write-Host "Gitea branch protection configured for 'main' branch." -ForegroundColor Green
 } catch {
-    Write-Host "Branch protection status: Active / Already exists." -ForegroundColor Green
+    try {
+        $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/$orgName/$repoName/branch_protections/main" `
+            -Method Patch -Headers $giteaHeaders -Body $branchProtectBody
+        Write-Host "Updated Gitea branch protection for 'main' branch." -ForegroundColor Green
+    } catch {
+        Write-Host "Branch protection status: Active or skipped." -ForegroundColor Yellow
+    }
 }

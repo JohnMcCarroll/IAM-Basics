@@ -140,16 +140,38 @@ $giteaHeaders = @{
     "Content-Type"  = "application/json"
 }
 
+# 1. Create Organization 'trading-org'
+$orgBody = @{ username = "trading-org"; visibility = "public" } | ConvertTo-Json
 try {
-    $repoBody = @{ name = "trade-scripts"; auto_init = $true; private = $false } | ConvertTo-Json
-    Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users/giteaadmin/repos" `
-        -Method Post -Headers $giteaHeaders -Body $repoBody
-    Write-Host "Created Gitea repository: trade-scripts" -ForegroundColor Green
+    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs" -Method Post -Headers $giteaHeaders -Body $orgBody
+    Write-Host "Created Gitea organization: trading-org" -ForegroundColor Green
 } catch {
-    Write-Host "Gitea repository 'trade-scripts' already exists." -ForegroundColor Yellow
+    Write-Host "Organization 'trading-org' already exists." -ForegroundColor Yellow
 }
 
-# Seed simulate_trade.py script into Gitea
+# 2. Create 'trade-scripts' Repository under 'trading-org'
+try {
+    $repoBody = @{ name = "trade-scripts"; auto_init = $true; private = $false } | ConvertTo-Json
+    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/trading-org/repos" `
+        -Method Post -Headers $giteaHeaders -Body $repoBody
+    Write-Host "Created Gitea repository: trading-org/trade-scripts" -ForegroundColor Green
+} catch {
+    Write-Host "Gitea repository 'trading-org/trade-scripts' already exists." -ForegroundColor Yellow
+}
+
+
+# 1. Generate an API Access Token for giteaadmin via Gitea CLI
+$tokenName = "bootstrap-token-$(Get-Random)"
+$apiToken = (docker exec -u git iam-gitea gitea admin user generate-access-token --username giteaadmin --token-name $tokenName --raw).Trim()
+
+# 2. Configure Gitea headers using Token Authentication
+$giteaHeaders = @{
+    "Authorization" = "token $apiToken"
+    "Content-Type"  = "application/json"
+}
+
+
+# Seed simulate_trade.py script into trading-org repository
 $pythonCode = @"
 import sys, random, json
 
@@ -176,9 +198,9 @@ try {
         message = "Add simulate_trade.py execution script"
     } | ConvertTo-Json
 
-    Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/giteaadmin/trade-scripts/contents/simulate_trade.py" `
+    $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/repos/trading-org/trade-scripts/contents/simulate_trade.py" `
         -Method Post -Headers $giteaHeaders -Body $fileBody
-    Write-Host "Seeded simulate_trade.py into Gitea repo." -ForegroundColor Green
+    Write-Host "Seeded simulate_trade.py into trading-org/trade-scripts repo." -ForegroundColor Green
 } catch {
     Write-Host "simulate_trade.py already present in repository." -ForegroundColor Yellow
 }

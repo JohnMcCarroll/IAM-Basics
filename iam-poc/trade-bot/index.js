@@ -95,7 +95,8 @@ app.post('/webhook/approve', async (req, res) => {
 
     const trade = dbRes.rows[0];
 
-    const giteaRes = await axios.get(`${GITEA_URL}/api/v1/repos/giteaadmin/trade-scripts/raw/main/simulate_trade.py`);
+    // Updated fetch path to query trading-org instead of giteaadmin
+    const giteaRes = await axios.get(`${GITEA_URL}/api/v1/repos/trading-org/trade-scripts/raw/main/simulate_trade.py`);
     fs.writeFileSync('/tmp/simulate_trade.py', giteaRes.data);
 
     exec(`python3 /tmp/simulate_trade.py ${trade.trade_id} ${trade.symbol} ${trade.quantity}`, async (error, stdout) => {
