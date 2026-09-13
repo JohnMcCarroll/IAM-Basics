@@ -132,3 +132,59 @@ app.listen(5000, async () => {
   console.log('Trade Bot service listening on port 5000');
   await authenticateRocketChat();
 });
+
+app.post('/webhook/joiner', async (req, res) => {
+  const { text = '', channel_name = '' } = req.body;
+
+  if (channel_name !== 'hr') {
+    return res.json({ text: "⚠️ Access Denied: Command restricted to #hr channel." });
+  }
+
+  const parts = text.trim().split(/\s+/);
+  if (parts.length < 4) {
+    return res.json({ text: "Usage: `!joiner <FirstName> <LastName> <developer|trader|manager|human_resources>`" });
+  }
+
+  const [, firstName, lastName, roleName] = parts;
+
+  // Map role names to midPoint Role OIDs
+  const roleOids = {
+    developer: '10000000-0000-0000-0000-000000000001',
+    trader: '10000000-0000-0000-0000-000000000002',
+    manager: '10000000-0000-0000-0000-000000000003',
+    human_resources: '10000000-0000-0000-0000-000000000004'
+  };
+
+  const roleOid = roleOids[roleName.toLowerCase()];
+  if (!roleOid) {
+    return res.json({ text: `Invalid role. Choose from: ${Object.keys(roleOids).join(', ')}` });
+  }
+
+  // Construct minimal midPoint User XML
+  const userXml = `
+    <user xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3" xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3">
+      <givenName>${firstName}</givenName>
+      <familyName>${lastName}</familyName>
+      <assignment>
+        <targetRef oid="${roleOid}" type="c:RoleType"/>
+      </assignment>
+    </user>
+  `;
+
+  // Submit directly to midPoint REST API
+  try {
+    const auth = Buffer.from('administrator:5ecr3t').toString('base64'); // midPoint admin credentials
+    await axios.post('http://midpoint:8080/midpoint/ws/rest/users', userXml, {
+      headers: {
+        'Content-Type': 'application/xml',
+        'Authorization': `Basic ${auth}`
+      }
+    });
+
+    return res.json({
+      text: `✅ **Joiner Process Started in midPoint**\n**User:** ${firstName} ${lastName}\n**Role:** ${roleName}\nmidPoint is auto-generating identity details and provisioning target accounts via Resource Inducements.`
+    });
+  } catch (err) {
+    return res.json({ text: `❌ midPoint Processing Failed: ${err.message}` });
+  }
+});

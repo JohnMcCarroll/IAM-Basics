@@ -1,14 +1,7 @@
 # bootstrap.ps1 - Automated IAM PoC Environment Setup
 
-Write-Host "Launching Docker multicontainer environment" -ForegroundColor Cyan
-
-docker compose up -d
-
-Start-Sleep -Seconds 60 # wait for containers to initalize
-
-
 $ErrorActionPreference = "Stop"
-Write-Host "[1/4] Waiting for services to become responsive..." -ForegroundColor Cyan
+Write-Host "[1/3] Waiting for services to become responsive..." -ForegroundColor Cyan
 
 # Polling helper function
 function Wait-ForUrl {
@@ -35,11 +28,11 @@ function Wait-ForUrl {
     Write-Host " Ready! (HTTP $statusCode)" -ForegroundColor Green
 }
 
-# Wait for Keycloak and Gitea web endpoints
+# Wait for core endpoints
 Wait-ForUrl -Uri "http://localhost:8080/realms/master" -ServiceName "Keycloak"
 Wait-ForUrl -Uri "http://localhost:3000" -ServiceName "Gitea"
 
-Write-Host "`n[2/4] Provisioning Keycloak OIDC Clients via kcadm CLI..." -ForegroundColor Cyan
+Write-Host "`n[2/3] Provisioning Keycloak OIDC Clients via kcadm CLI..." -ForegroundColor Cyan
 
 $giteaSecret = "gitea-secret-123"
 $rocketchatSecret = "rocketchat-secret-123"
@@ -54,7 +47,7 @@ docker exec iam-keycloak /opt/keycloak/bin/kcadm.sh config credentials `
     --user admin `
     --password admin
 
-# Define JSON payloads
+# Define OIDC Client JSON payloads
 $giteaClientJson = @"
 {
     "clientId": "gitea",
@@ -80,39 +73,9 @@ $rocketchatClientJson = @"
 $giteaClientJson | docker exec -i iam-keycloak /opt/keycloak/bin/kcadm.sh create clients -r master -f -
 $rocketchatClientJson | docker exec -i iam-keycloak /opt/keycloak/bin/kcadm.sh create clients -r master -f -
 
-# Seed Keycloak users from XML
-$xmlFilePath = "init_employees_midPoint.xml"
-
-if (Test-Path $xmlFilePath) {
-    [xml]$xmlContent = Get-Content $xmlFilePath
-    $xmlUsers = $xmlContent.SelectNodes("//*[local-name()='user']")
-
-    foreach ($u in $xmlUsers) {
-        $username  = $u.name
-        $firstName = if ($u.givenName) { $u.givenName } else { $username }
-        $lastName  = if ($u.familyName) { $u.familyName } else { "User" }
-        $email     = if ($u.emailAddress) { $u.emailAddress } else { "$username@company.local" }
-
-        docker exec iam-keycloak /opt/keycloak/bin/kcadm.sh create users -r master `
-            -s username="$username" `
-            -s enabled=true `
-            -s email="$email" `
-            -s firstName="$firstName" `
-            -s lastName="$lastName"
-
-        docker exec iam-keycloak /opt/keycloak/bin/kcadm.sh set-password -r master `
-            --username "$username" `
-            --new-password "Password123!" `
-            --temporary=false
-    }
-    Write-Host "Parsed XML and seeded $($xmlUsers.Count) users into Keycloak." -ForegroundColor Green
-} else {
-    Write-Host "Warning: $xmlFilePath not found. Skipping Keycloak user seeding." -ForegroundColor Yellow
-}
-
 Write-Host "Keycloak OIDC clients configured successfully." -ForegroundColor Green
 
-Write-Host "`n[3/4] Configuring Gitea Admin, Keycloak SSO, and Trade Scripts Repo..." -ForegroundColor Cyan
+Write-Host "`n[3/3] Configuring Gitea, Rocket.Chat, and Database Schema..." -ForegroundColor Cyan
 
 # Create Gitea Admin User
 docker exec -u git iam-gitea gitea admin user create `
@@ -159,17 +122,14 @@ try {
     Write-Host "Gitea repository 'trading-org/trade-scripts' already exists." -ForegroundColor Yellow
 }
 
-
-# 1. Generate an API Access Token for giteaadmin via Gitea CLI
+# Generate an API Access Token for giteaadmin via Gitea CLI
 $tokenName = "bootstrap-token-$(Get-Random)"
 $apiToken = (docker exec -u git iam-gitea gitea admin user generate-access-token --username giteaadmin --token-name $tokenName --raw).Trim()
 
-# 2. Configure Gitea headers using Token Authentication
 $giteaHeaders = @{
     "Authorization" = "token $apiToken"
     "Content-Type"  = "application/json"
 }
-
 
 # Seed simulate_trade.py script into trading-org repository
 $pythonCode = @"
@@ -207,18 +167,6 @@ try {
 
 $ErrorActionPreference = $oldEAP
 Write-Host "Gitea setup complete." -ForegroundColor Green
-
-Write-Host "`n[4/4] Synchronizing midPoint and Configuring Rocket.Chat..." -ForegroundColor Cyan
-
-Wait-ForUrl -Uri "http://localhost:8081" -ServiceName "midPoint"
-
-if (Test-Path $xmlFilePath) {
-    docker cp $xmlFilePath iam-midpoint:/tmp/init_employees_midPoint.xml
-    docker exec iam-midpoint /opt/midpoint/bin/ninja.sh import -i /tmp/init_employees_midPoint.xml -O
-    Write-Host "Employees and roles synchronized into midPoint." -ForegroundColor Green
-} else {
-    Write-Host "Error: $xmlFilePath was not found!" -ForegroundColor Red
-}
 
 # Rocket.Chat REST API Setup
 Wait-ForUrl -Uri "http://localhost:4000/api/info" -ServiceName "Rocket.Chat API"
@@ -297,7 +245,6 @@ foreach ($channel in $channels) {
 try {
     $createTableSql = "CREATE TABLE IF NOT EXISTS trades (trade_id VARCHAR(50) PRIMARY KEY, requester VARCHAR(50), approver VARCHAR(50), symbol VARCHAR(10), quantity INT, status VARCHAR(20), pnl_usd NUMERIC(10,2), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"
     
-    # Updated credentials: -U iam_user -d iam_database
     $psqlOut = docker exec -i iam-postgres psql -U iam_user -d iam_database -c $createTableSql 2>&1
     
     if ($LASTEXITCODE -eq 0) {
@@ -309,7 +256,6 @@ try {
     Write-Host "Error connecting to PostgreSQL container: $_" -ForegroundColor Red
 }
 
-# configure rocketchat webhooks
 # Auto-configure Rocket.Chat Integrations for Trade Bot
 $tradeHookJson = @"
 {
@@ -339,7 +285,6 @@ $approveHookJson = @"
 }
 "@
 
-# Remove existing hooks if present to allow clean re-runs
 try {
     $existing = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/integrations.list" -Method Get -Headers $rcHeaders
 } catch {
@@ -371,4 +316,3 @@ foreach ($hook in $hooks) {
 }
 
 Write-Host "`nEnvironment Bootstrap Complete!" -ForegroundColor Green
-

@@ -1,0 +1,84 @@
+<objectTemplate oid="10000000-0000-0000-0000-000000000099"
+                xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+                xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <name>Default User Object Template</name>
+
+    <!-- Auto-generate Username if omitted -->
+    <mapping>
+        <name>Generate Username</name>
+        <strength>weak</strength>
+        <source><c:path>givenName</c:path></source>
+        <source><c:path>familyName</c:path></source>
+        <expression>
+            <script>
+                <code>
+                    if (givenName != null &amp;&amp; familyName != null) {
+                        return basic.stringify(givenName).toLowerCase() + '.' + basic.stringify(familyName).toLowerCase()
+                    }
+                </code>
+            </script>
+        </expression>
+        <target><c:path>name</c:path></target>
+    </mapping>
+
+    <!-- Auto-generate Full Name if omitted -->
+    <mapping>
+        <name>Generate Full Name</name>
+        <strength>weak</strength>
+        <source><c:path>givenName</c:path></source>
+        <source><c:path>familyName</c:path></source>
+        <expression>
+            <script>
+                <code>
+                    if (givenName != null &amp;&amp; familyName != null) {
+                        return basic.stringify(givenName) + ' ' + basic.stringify(familyName)
+                    }
+                </code>
+            </script>
+        </expression>
+        <target><c:path>fullName</c:path></target>
+    </mapping>
+
+    <!-- Auto-generate Email Address if omitted -->
+    <mapping>
+        <name>Generate Email Address</name>
+        <strength>weak</strength>
+        <source><c:path>givenName</c:path></source>
+        <source><c:path>familyName</c:path></source>
+        <expression>
+            <script>
+                <code>
+                    if (givenName != null &amp;&amp; familyName != null) {
+                        return basic.stringify(givenName).toLowerCase() + '.' + basic.stringify(familyName).toLowerCase() + '@company.local'
+                    }
+                </code>
+            </script>
+        </expression>
+        <target><c:path>emailAddress</c:path></target>
+    </mapping>
+
+    <!-- Auto-set Default Password if omitted -->
+    <mapping>
+        <name>Default Password Assignment</name>
+        <strength>weak</strength>
+        <expression>
+            <value>
+                <clearValue>Password123!</clearValue>
+            </value>
+        </expression>
+        <target><c:path>credentials/password/value</c:path></target>
+    </mapping>
+
+    <!-- Automatically Assign OpenLDAP Resource to All Users -->
+    <mapping>
+        <name>Assign OpenLDAP Target Resource</name>
+        <strength>strong</strength>
+        <expression>
+            <value xsi:type="c:AssignmentType">
+                <c:targetRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
+            </value>
+        </expression>
+        <target><c:path>assignment</c:path></target>
+    </mapping>
+</objectTemplate>

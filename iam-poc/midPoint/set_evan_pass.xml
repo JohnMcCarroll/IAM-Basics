@@ -1,0 +1,12 @@
+﻿<userDelta xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+           xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+           xmlns:t="http://prism.evolveum.com/xml/ns/public/types-3"
+           oid="30000000-0000-0000-0000-000000000001">
+    <itemDelta>
+        <t:modificationType>replace</t:modificationType>
+        <t:path>c:credentials/c:password/c:value</t:path>
+        <t:value>
+            <clearValue>Password123!</clearValue>
+        </t:value>
+    </itemDelta>
+</userDelta>

@@ -1,0 +1,9 @@
+﻿<user xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3" 
+      xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3">
+    <name>evan.dev</name>
+    <givenName>Evan</givenName>
+    <familyName>Dev</familyName>
+    <assignment>
+        <targetRef oid="10000000-0000-0000-0000-000000000001" type="c:RoleType"/>
+    </assignment>
+</user>

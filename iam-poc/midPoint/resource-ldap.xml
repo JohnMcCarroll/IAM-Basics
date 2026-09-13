@@ -1,0 +1,18 @@
+<resource xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+          xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+          xmlns:icfc="http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/connector-schema-3"
+          oid="10000000-0000-0000-0000-000000000040">
+    <name>OpenLDAP Directory</name>
+    <connectorRef oid="4eaef423-cf3c-4b89-bc01-4d196f94bbe0" type="c:ConnectorType"/>
+    <connectorConfiguration>
+        <icfc:configurationProperties xmlns:icfldap="http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/bundle/com.evolveum.polygon.connector-ldap/com.evolveum.polygon.connector.ldap.LdapConnector">
+            <icfldap:host>iam-ldap</icfldap:host>
+            <icfldap:port>389</icfldap:port>
+            <icfldap:bindDn>cn=admin,dc=company,dc=local</icfldap:bindDn>
+            <icfldap:bindPassword>
+                <clearValue>adminpassword</clearValue>
+            </icfldap:bindPassword>
+            <icfldap:baseContext>dc=company,dc=local</icfldap:baseContext>
+        </icfc:configurationProperties>
+    </connectorConfiguration>
+</resource>

@@ -1,0 +1,195 @@
+<objects xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+         xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
+         xmlns:t="http://pragma.com/xml/ns/public/sharing/types-3">
+
+    <!-- ROLES WITH RESOURCE INDUCEMENTS -->
+    <!-- 1. Developer Role -->
+    <role oid="10000000-0000-0000-0000-000000000001">
+        <name>developer</name>
+        <displayName>Developer</displayName>
+        <description>Software engineering team member</description>
+        <!-- Induce Keycloak Account Creation -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <!-- Induces Gitea Account Creation -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000010" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <!-- Induces Rocket.Chat Account Creation -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+    </role>
+
+    <!-- 2. Trader Role -->
+    <role oid="10000000-0000-0000-0000-000000000002">
+        <name>trader</name>
+        <displayName>Trader</displayName>
+        <description>Financial trading team member</description>
+        <!-- Induce Keycloak Account Creation -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000010" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+    </role>
+
+    <!-- 3. Manager Role -->
+    <role oid="10000000-0000-0000-0000-000000000003">
+        <name>manager</name>
+        <displayName>Manager</displayName>
+        <description>Team Lead / People Manager</description>
+        <!-- Induce Keycloak Account Creation -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000010" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+    </role>
+
+    <!-- 4. Human Resources Role -->
+    <role oid="10000000-0000-0000-0000-000000000004">
+        <name>human_resources</name>
+        <displayName>Human Resources</displayName>
+        <description>HR department staff</description>
+        <!-- Induce Keycloak Account Creation -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+        <!-- Induces Rocket.Chat Account Creation Only -->
+        <inducement>
+            <construction>
+                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <kind>account</kind>
+                <intent>default</intent>
+            </construction>
+        </inducement>
+    </role>
+
+    <!-- USERS -->
+    <!-- 1. Alice Developer -->
+    <user oid="20000000-0000-0000-0000-000000000001">
+        <name>alice.dev</name>
+        <givenName>Alice</givenName>
+        <familyName>Developer</familyName>
+        <fullName>Alice Developer</fullName>
+        <emailAddress>alice.dev@company.local</emailAddress>
+        <credentials>
+            <password>
+                <value>
+                    <clearValue>Password123!</clearValue>
+                </value>
+            </password>
+        </credentials>
+        <assignment>
+            <targetRef oid="10000000-0000-0000-0000-000000000001" type="c:RoleType"/>
+        </assignment>
+    </user>
+
+    <!-- 2. Bob Trader -->
+    <user oid="20000000-0000-0000-0000-000000000002">
+        <name>bob.trader</name>
+        <givenName>Bob</givenName>
+        <familyName>Trader</familyName>
+        <fullName>Bob Trader</fullName>
+        <emailAddress>bob.trader@company.local</emailAddress>
+        <credentials>
+            <password>
+                <value>
+                    <clearValue>Password123!</clearValue>
+                </value>
+            </password>
+        </credentials>
+        <assignment>
+            <targetRef oid="10000000-0000-0000-0000-000000000002" type="c:RoleType"/>
+        </assignment>
+    </user>
+
+    <!-- 3. Charlie Manager -->
+    <user oid="20000000-0000-0000-0000-000000000003">
+        <name>charlie.mgr</name>
+        <givenName>Charlie</givenName>
+        <familyName>Manager</familyName>
+        <fullName>Charlie Manager</fullName>
+        <emailAddress>charlie.mgr@company.local</emailAddress>
+        <credentials>
+            <password>
+                <value>
+                    <clearValue>Password123!</clearValue>
+                </value>
+            </password>
+        </credentials>
+        <assignment>
+            <targetRef oid="10000000-0000-0000-0000-000000000003" type="c:RoleType"/>
+        </assignment>
+    </user>
+
+    <!-- 4. Diana HR -->
+    <user oid="20000000-0000-0000-0000-000000000004">
+        <name>diana.hr</name>
+        <givenName>Diana</givenName>
+        <familyName>HR</familyName>
+        <fullName>Diana HR</fullName>
+        <emailAddress>diana.hr@company.local</emailAddress>
+        <credentials>
+            <password>
+                <value>
+                    <clearValue>Password123!</clearValue>
+                </value>
+            </password>
+        </credentials>
+        <assignment>
+            <targetRef oid="10000000-0000-0000-0000-000000000004" type="c:RoleType"/>
+        </assignment>
+    </user>
+
+</objects>
