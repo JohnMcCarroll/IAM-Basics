@@ -68,6 +68,6 @@ while (-not $ready) {
 
 .\load_midpoint.ps1
 
-# .\rbac.ps1
+.\rbac.ps1
 
 Write-Host (docker logs iam-midpoint 2>&1 | Select-String -Pattern "initial password")

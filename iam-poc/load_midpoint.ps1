@@ -89,56 +89,93 @@ while ($true) {
 }
 Write-Host "Keycloak Master Realm is online." -ForegroundColor Green
 
-$kcTokenResponse = Invoke-RestMethod -Uri "http://localhost:8080/realms/master/protocol/openid-connect/token" `
+$kcBaseUrl = "http://localhost:8080"
+$realmName = "master"
+
+# 1. Authenticate
+$kcToken = (Invoke-RestMethod -Uri "$kcBaseUrl/realms/master/protocol/openid-connect/token" `
     -Method Post `
-    -Body @{
-        client_id  = "admin-cli"
-        grant_type = "password"
-        username   = "admin"
-        password   = "admin"
-    }
+    -Body @{ client_id = "admin-cli"; grant_type = "password"; username = "admin"; password = "admin" }).access_token
 
 $kcHeaders = @{
-    "Authorization" = "Bearer $($kcTokenResponse.access_token)"
-    "Content-Type"  = "application/json"
+    "Authorization" = "Bearer $kcToken"
+    "Content-Type"   = "application/json"
 }
 
-$kcExisting = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/components?name=midpoint-ldap" -Headers $kcHeaders -Method Get
+# 2. Get True Internal Realm ID
+$realmInfo = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName" -Headers $kcHeaders
+$realmId   = $realmInfo.id
+Write-Host "Realm Name: '$($realmInfo.realm)' | Internal Realm ID: '$realmId'" -ForegroundColor Cyan
 
-if ($kcExisting -and $kcExisting.Count -gt 0) {
-    $kcLdapId = $kcExisting[0].id
-    Write-Host "Keycloak LDAP User Federation already exists (ID: $kcLdapId)." -ForegroundColor Yellow
-} else {
-    $kcBody = @{
-        name         = "midpoint-ldap"
-        providerId   = "ldap"
-        providerType = "org.keycloak.storage.UserStorageProvider"
-        parentId     = "master"
+# 3. Purge Existing Components
+$kcExisting = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components?type=org.keycloak.storage.UserStorageProvider" -Headers $kcHeaders -Method Get
+foreach ($comp in $kcExisting) {
+    $children = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components?parent=$($comp.id)" -Headers $kcHeaders -Method Get
+    foreach ($child in $children) {
+        Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components/$($child.id)" -Headers $kcHeaders -Method Delete
+    }
+    Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components/$($comp.id)" -Headers $kcHeaders -Method Delete
+    Write-Host "Deleted component: $($comp.id)" -ForegroundColor Yellow
+}
+
+# 4. Create LDAP Component with Correct Internal parentId
+$kcBody = @{
+    name         = "midpoint-ldap"
+    providerId   = "ldap"
+    providerType = "org.keycloak.storage.UserStorageProvider"
+    parentId     = $realmId
+    config       = @{
+        vendor                = @("openldap")
+        connectionUrl         = @("ldap://iam-ldap:389")
+        usersDn               = @("dc=company,dc=local")
+        bindDn                = @("cn=admin,dc=company,dc=local")
+        bindCredential        = @("adminpassword")
+        editMode              = @("READ_ONLY")
+        usernameLDAPAttribute = @("uid")
+        rdnLDAPAttribute      = @("uid")
+        uuidLDAPAttribute     = @("entryUUID")
+        userObjectClasses     = @("inetOrgPerson")
+        importEnabled         = @("true")
+        searchScope           = @("2")
+        authType              = @("simple")
+    }
+} | ConvertTo-Json -Depth 5
+
+$null = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components" -Method Post -Headers $kcHeaders -Body $kcBody
+
+# Fetch Component ID
+$kcComponents = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components?name=midpoint-ldap" -Headers $kcHeaders -Method Get
+$kcLdapId = $kcComponents[0].id
+
+# 5. Inject Mappers
+$mappers = @(
+    @{ name = "username"; modelAttr = "username"; ldapAttr = "uid" },
+    @{ name = "email"; modelAttr = "email"; ldapAttr = "mail" },
+    @{ name = "firstName"; modelAttr = "firstName"; ldapAttr = "givenName" },
+    @{ name = "lastName"; modelAttr = "lastName"; ldapAttr = "sn" }
+)
+
+foreach ($m in $mappers) {
+    $mapperBody = @{
+        name         = $m.name
+        providerId   = "user-attribute-ldap-mapper"
+        providerType = "org.keycloak.storage.ldap.mappers.LDAPStorageMapper"
+        parentId     = $kcLdapId
         config       = @{
-            vendor                = @("other")
-            connectionUrl         = @("ldap://iam-ldap:389")
-            usersDn               = @("ou=users,dc=company,dc=local")
-            bindDn                = @("cn=admin,dc=company,dc=local")
-            bindCredential        = @("adminpassword")
-            editMode              = @("READ_ONLY")
-            usernameLDAPAttribute = @("uid")
-            rdnLDAPAttribute      = @("uid")
-            uuidLDAPAttribute     = @("entryUUID")
-            userObjectClasses     = @("inetOrgPerson, organizationalPerson")
-            importEnabled         = @("true")
+            "user.model.attribute"         = @($m.modelAttr)
+            "ldap.attribute"              = @($m.ldapAttr)
+            "read.only"                   = @("true")
+            "always.read.value.from.ldap" = @("true")
+            "is.mandatory.in.ldap"        = @("true")
         }
     } | ConvertTo-Json -Depth 5
-
-    $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/components" -Method Post -Headers $kcHeaders -Body $kcBody
-    $kcComponents = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/components?name=midpoint-ldap" -Headers $kcHeaders -Method Get
-    $kcLdapId = $kcComponents[0].id
-    Write-Host "Keycloak LDAP User Federation configured (ID: $kcLdapId)." -ForegroundColor Green
+    $null = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/components" -Method Post -Headers $kcHeaders -Body $mapperBody
 }
 
-if ($kcLdapId) {
-    $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/user-storage/$kcLdapId/sync?action=triggerFullSync" -Method Post -Headers $kcHeaders
-    Write-Host "Triggered initial LDAP sync in Keycloak." -ForegroundColor Green
-}
+# 6. Execute Full Sync
+$syncResult = Invoke-RestMethod -Uri "$kcBaseUrl/admin/realms/$realmName/user-storage/$kcLdapId/sync?action=triggerFullSync" -Method Post -Headers $kcHeaders
+Write-Host "SYNC RESULT: Added: $($syncResult.added), Updated: $($syncResult.updated), Removed: $($syncResult.removed)" -ForegroundColor Green
+
 
 # ==============================================================================
 # 4. Configure Gitea LDAP Authentication Source

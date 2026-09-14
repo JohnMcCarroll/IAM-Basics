@@ -168,7 +168,7 @@ try {
     }
 
     # 1. Provision Private Channels (Convert existing Public channels to Private if needed)
-    $privateChannels = @("trades", "trade-approval", "hr", "dev", "managers")
+    $privateChannels = @("trades", "trade-approvals", "hr", "dev", "managers")
     $channelMap = @{}
 
     foreach ($chan in $privateChannels) {
@@ -222,7 +222,7 @@ try {
     $usersToProvision = @(
         @{ name = "Alice Dev";    username = "alice.dev";   email = "alice.dev@company.local";   channels = @("dev", "general") },
         @{ name = "Bob Trader";   username = "bob.trader";  email = "bob.trader@company.local";  channels = @("trades", "general") },
-        @{ name = "Charlie Mgr";  username = "charlie.mgr"; email = "charlie.mgr@company.local"; channels = @("trade-approval", "managers", "general") },
+        @{ name = "Charlie Mgr";  username = "charlie.mgr"; email = "charlie.mgr@company.local"; channels = @("trade-approvals", "managers", "general") },
         @{ name = "Diana HR";     username = "diana.hr";    email = "diana.hr@company.local";    channels = @("hr", "general") }
     )
 
