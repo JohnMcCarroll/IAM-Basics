@@ -193,26 +193,18 @@ Write-Host "SYNC RESULT: Added: $($syncResult.added), Updated: $($syncResult.upd
 # }
 # Write-Host "Gitea is online." -ForegroundColor Green
 
-Write-Host "Checking Gitea LDAP Authentication configuration..." -ForegroundColor Yellow
+Write-Host "Checking Gitea Keycloak OIDC Authentication configuration..." -ForegroundColor Yellow
 $giteaAuthList = docker exec -u git iam-gitea gitea admin auth list 2>&1
-if ($giteaAuthList -match "midpoint-ldap") {
-    Write-Host "Gitea LDAP Authentication source already exists." -ForegroundColor Yellow
+if ($giteaAuthList -match "keycloak") {
+    Write-Host "Gitea Keycloak OIDC Authentication source already exists." -ForegroundColor Yellow
 } else {
-    docker exec -u git iam-gitea gitea admin auth add-ldap `
-        --name "midpoint-ldap" `
-        --security-protocol unencrypted `
-        --host iam-ldap `
-        --port 389 `
-        --user-search-base "ou=users,dc=company,dc=local" `
-        --user-filter "(&(objectClass=inetOrgPerson)(|(uid=%[1]s)(mail=%[1]s)))" `
-        --username-attribute uid `
-        --firstname-attribute givenName `
-        --surname-attribute sn `
-        --email-attribute mail `
-        --bind-dn "cn=admin,dc=company,dc=local" `
-        --bind-password "adminpassword" `
-        --synchronize-users
-    Write-Host "Gitea LDAP Authentication source configured successfully." -ForegroundColor Green
+    docker exec -u git iam-gitea gitea admin auth add-oauth `
+        --name "keycloak" `
+        --provider "openidConnect" `
+        --key "gitea" `
+        --secret "gitea-secret" `
+        --auto-discover-url "http://iam-keycloak:8080/realms/master/.well-known/openid-configuration"
+    Write-Host "Gitea Keycloak OIDC Authentication source configured successfully." -ForegroundColor Green
 }
 
 # ==============================================================================

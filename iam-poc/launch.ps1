@@ -29,14 +29,23 @@ docker compose up -d
 Write-Host "Waiting for midPoint REST API and Connector discovery..." -ForegroundColor Yellow
 
 $ready = $false
+$timeoutSeconds = 300
+$startTime = Get-Date
+
 while (-not $ready) {
+    # Check overall timeout limit
+    if (((Get-Date) - $startTime).TotalSeconds -gt $timeoutSeconds) {
+        Write-Host "Timed out waiting for midPoint to start." -ForegroundColor Red
+        break
+    }
+
     try {
         # 1. Resolve Admin Password
         $logOutput = docker logs iam-midpoint 2>&1 | Select-String -Pattern "initial password"
         if ($logOutput) {
             $adminPassword = ($logOutput -split ":")[-1].Trim().Trim('"')
         } else {
-            $adminPassword = "5ecr3t" # Fallback if database volume was reused
+            $adminPassword = "5ecr3t"
         }
 
         # 2. Query REST API
@@ -47,21 +56,24 @@ while (-not $ready) {
         }
 
         $response = Invoke-WebRequest -Uri "http://localhost:8081/midpoint/ws/rest/connectors" -Headers $headers -UseBasicParsing -ErrorAction Stop
-        [xml]$xml = $response.Content
+        
+        if ($response.StatusCode -eq 200) {
+            [xml]$xml = $response.Content
+            $connectorNodes = $xml.SelectNodes("//*[local-name()='object']")
+            $count = if ($connectorNodes) { $connectorNodes.Count } else { 0 }
 
-        # 3. Count connector nodes using XPath
-        $connectorNodes = $xml.SelectNodes("//*[local-name()='object']")
-        $count = $connectorNodes.Count
-
-        if ($count -gt 0) {
-            Write-Host "midPoint is ready! Discovered $count connectors." -ForegroundColor Green
-            $ready = $true
+            if ($count -gt 0) {
+                Write-Host "midPoint is ready! Discovered $count connectors." -ForegroundColor Green
+                $ready = $true
+            } else {
+                Write-Host "midPoint REST API active, waiting for connector discovery..." -ForegroundColor Yellow
+            }
         }
     } catch {
-        # midPoint still initializing
+        Write-Host "midPoint web server not reachable yet. Retrying in 10s..." -ForegroundColor DarkGray
     }
 
-    if (-not $ready) { Start-Sleep -Seconds 5 }
+    if (-not $ready) { Start-Sleep -Seconds 10 }
 }
 
 .\bootstrap.ps1

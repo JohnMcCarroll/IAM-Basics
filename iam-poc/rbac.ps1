@@ -249,7 +249,7 @@ try {
                 name             = $u.name
                 email            = $u.email
                 username         = $u.username
-                password         = "TempPassword123!"
+                password         = "Password123!"
                 sendWelcomeEmail = $false
                 verified         = $true
             } | ConvertTo-Json
@@ -322,6 +322,16 @@ try {
 }
 
 
+
+
+
+
+
+
+
+
+
+
 # ==============================================================================
 # 4. Enforce Gitea RBAC, Teams & Branch Protections
 # ==============================================================================
@@ -330,7 +340,7 @@ Write-Host "--- Configuring Gitea RBAC & Branch Protections ---" -ForegroundColo
 $giteaAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("giteaadmin:Password123!"))
 $giteaHeaders = @{
     "Authorization" = "Basic $giteaAuth"
-    "Content-Type"  = "application/json"
+    "Content-Type"   = "application/json"
 }
 
 $orgName  = "trading-org"
@@ -343,42 +353,60 @@ try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs" -Method
 $repoBody = @{ name = $repoName; private = $false; auto_init = $true } | ConvertTo-Json
 try { $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/$orgName/repos" -Method Post -Headers $giteaHeaders -Body $repoBody } catch {}
 
-
-
-
-# 2. Provision Gitea Accounts & Bind to Keycloak OIDC Source
+# 2. Dynamically Resolve Keycloak Auth Source ID & Provision Accounts
 $giteaUsers = @(
     @{ username = "alice.dev";   email = "alice.dev@company.local";   team = "Developers" },
     @{ username = "bob.trader";  email = "bob.trader@company.local";  team = "Traders" },
     @{ username = "charlie.mgr"; email = "charlie.mgr@company.local"; team = "Managers" }
 )
 
-# Resolve Keycloak Auth Source ID directly via CLI (falls back to 1)
-$keycloakAuthId = 1
+# Resolve Keycloak OAuth2 Source ID directly via CLI
+$keycloakAuthId = $null
 try {
     $cliAuthOutput = docker exec -u git iam-gitea gitea admin auth list
     $matchedLine = $cliAuthOutput | Where-Object { $_ -like "*keycloak*" }
     if ($matchedLine) {
         $keycloakAuthId = [int]($matchedLine.Trim().Split()[0])
     }
-} catch {
-    $keycloakAuthId = 1
-}
+} catch {}
+
+if (-not $keycloakAuthId) { $keycloakAuthId = 1 }
 
 foreach ($u in $giteaUsers) {
-    $userBody = @{
-        username             = $u.username
-        email                = $u.email
-        password             = "TempPassword123!"
-        must_change_password = $false
-        login_source_id      = $keycloakAuthId  # Links account directly to Keycloak SSO
-    } | ConvertTo-Json
-
+    $userExists = $false
     try {
-        $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users" -Method Post -Headers $giteaHeaders -Body $userBody
-        Write-Host "Created Gitea account: $($u.username) (Linked to SSO Auth Source ID: $keycloakAuthId)" -ForegroundColor Green
-    } catch {
-        Write-Host "Gitea account $($u.username) already exists or created via OIDC." -ForegroundColor Yellow
+        $existingUser = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/users/$($u.username)" -Method Get -Headers $giteaHeaders
+        $userExists = $true
+    } catch {}
+
+    if (-not $userExists) {
+        $userBody = @{
+            username             = $u.username
+            email                = $u.email
+            password             = "Password123!"
+            must_change_password = $false
+            source_id            = $keycloakAuthId
+            login_name           = $u.username
+        } | ConvertTo-Json
+
+        try {
+            $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users" -Method Post -Headers $giteaHeaders -Body $userBody
+            Write-Host "Created Gitea account: $($u.username) (Bound to Keycloak OIDC Source ID: $keycloakAuthId)" -ForegroundColor Green
+        } catch {
+            Write-Host "Could not create account $($u.username): $_" -ForegroundColor Red
+        }
+    } else {
+        $updateBody = @{
+            source_id  = $keycloakAuthId
+            login_name = $u.username
+        } | ConvertTo-Json
+
+        try {
+            $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users/$($u.username)" -Method Patch -Headers $giteaHeaders -Body $updateBody
+            Write-Host "Rebound existing user '$($u.username)' to Keycloak OIDC Source ID $keycloakAuthId" -ForegroundColor Green
+        } catch {
+            Write-Host "Failed to update $($u.username): $_" -ForegroundColor Red
+        }
     }
 }
 
@@ -387,9 +415,6 @@ try {
     $null = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/admin/users/diana.hr" -Method Delete -Headers $giteaHeaders
     Write-Host "Removed Gitea account for diana.hr (HR access restricted)." -ForegroundColor Green
 } catch {}
-
-
-
 
 # 3. Provision Organization Teams with Role-Specific Permissions
 $teamsConfig = @(
@@ -405,6 +430,7 @@ foreach ($t in $teamsConfig) {
         name       = $t.name
         permission = $t.permission
         units      = $t.units
+        includes_all_repositories = $t.includes_all_repositories
     } | ConvertTo-Json
 
     try {
@@ -412,7 +438,6 @@ foreach ($t in $teamsConfig) {
         $teamIdMap[$t.name] = $resp.id
         Write-Host "Created Gitea Team: $($t.name) (Permission: $($t.permission))" -ForegroundColor Green
     } catch {
-        # Fetch existing team ID
         $allTeams = Invoke-RestMethod -Uri "http://localhost:3000/api/v1/orgs/$orgName/teams" -Method Get -Headers $giteaHeaders
         $matchedTeam = $allTeams | Where-Object { $_.name -eq $t.name }
         if ($matchedTeam) {
@@ -440,7 +465,7 @@ $branchProtectBody = @{
     branch_name                = "main"
     enable_push                = $false          # Disables direct commits (forces Pull Requests)
     enable_whitelist           = $false
-    required_approvals         = 1              # Requires 1 review approval to merge
+    required_approvals         = 1               # Requires 1 review approval to merge
     enable_approvals_whitelist = $true           # Restricts approval rights to specific teams
     approvals_whitelist_teams  = @("Managers")   # Only Managers team can approve/accept PRs
 } | ConvertTo-Json
