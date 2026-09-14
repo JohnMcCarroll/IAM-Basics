@@ -70,13 +70,17 @@
         <target><c:path>credentials/password/value</c:path></target>
     </mapping>
 
-    <!-- Automatically Assign OpenLDAP Resource to All Users -->
+<!-- Automatically Assign OpenLDAP Resource to All Users -->
     <mapping>
         <name>Assign OpenLDAP Target Resource</name>
         <strength>strong</strength>
         <expression>
             <value xsi:type="c:AssignmentType">
-                <c:targetRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
+                <construction>
+                    <resourceRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
+                    <kind>account</kind>
+                    <intent>default</intent>
+                </construction>
             </value>
         </expression>
         <target><c:path>assignment</c:path></target>

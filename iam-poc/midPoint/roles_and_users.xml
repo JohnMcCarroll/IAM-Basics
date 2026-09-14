@@ -8,26 +8,9 @@
         <name>developer</name>
         <displayName>Developer</displayName>
         <description>Software engineering team member</description>
-        <!-- Induce Keycloak Account Creation -->
         <inducement>
             <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <!-- Induces Gitea Account Creation -->
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000010" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <!-- Induces Rocket.Chat Account Creation -->
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <resourceRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
                 <kind>account</kind>
                 <intent>default</intent>
             </construction>
@@ -39,24 +22,9 @@
         <name>trader</name>
         <displayName>Trader</displayName>
         <description>Financial trading team member</description>
-        <!-- Induce Keycloak Account Creation -->
         <inducement>
             <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000010" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <resourceRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
                 <kind>account</kind>
                 <intent>default</intent>
             </construction>
@@ -68,24 +36,9 @@
         <name>manager</name>
         <displayName>Manager</displayName>
         <description>Team Lead / People Manager</description>
-        <!-- Induce Keycloak Account Creation -->
         <inducement>
             <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000010" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <resourceRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
                 <kind>account</kind>
                 <intent>default</intent>
             </construction>
@@ -97,18 +50,9 @@
         <name>human_resources</name>
         <displayName>Human Resources</displayName>
         <description>HR department staff</description>
-        <!-- Induce Keycloak Account Creation -->
         <inducement>
             <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000030" type="c:ResourceType"/>
-                <kind>account</kind>
-                <intent>default</intent>
-            </construction>
-        </inducement>
-        <!-- Induces Rocket.Chat Account Creation Only -->
-        <inducement>
-            <construction>
-                <resourceRef oid="10000000-0000-0000-0000-000000000020" type="c:ResourceType"/>
+                <resourceRef oid="10000000-0000-0000-0000-000000000040" type="c:ResourceType"/>
                 <kind>account</kind>
                 <intent>default</intent>
             </construction>

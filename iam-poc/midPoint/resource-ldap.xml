@@ -1,6 +1,8 @@
 <resource xmlns="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
           xmlns:c="http://midpoint.evolveum.com/xml/ns/public/common/common-3"
           xmlns:icfc="http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/connector-schema-3"
+          xmlns:icfs="http://midpoint.evolveum.com/xml/ns/public/connector/icf-1/resource-schema-3"
+          xmlns:ri="http://midpoint.evolveum.com/xml/ns/public/resource/instance-3"
           oid="10000000-0000-0000-0000-000000000040">
     <name>OpenLDAP Directory</name>
     <connectorRef oid="4eaef423-cf3c-4b89-bc01-4d196f94bbe0" type="c:ConnectorType"/>
@@ -15,4 +17,88 @@
             <icfldap:baseContext>dc=company,dc=local</icfldap:baseContext>
         </icfc:configurationProperties>
     </connectorConfiguration>
+    <schemaHandling>
+        <objectType>
+            <kind>account</kind>
+            <intent>default</intent>
+            <displayName>Default Account</displayName>
+            <default>true</default>
+            <objectClass>ri:inetOrgPerson</objectClass>
+
+            <!-- LDAP Distinguished Name must use icfs:name -->
+            <attribute>
+                <ref>ri:dn</ref>
+                <displayName>Distinguished Name</displayName>
+                <outbound>
+                    <source>
+                        <path>name</path>
+                    </source>
+                    <expression>
+                        <script>
+                            <code>
+                                return 'uid=' + name + ',dc=company,dc=local'
+                            </code>
+                        </script>
+                    </expression>
+                </outbound>
+            </attribute>
+
+            <!-- Standard LDAP attributes use ri: namespace -->
+            <attribute>
+                <ref>ri:uid</ref>
+                <displayName>Username</displayName>
+                <outbound>
+                    <source>
+                        <path>name</path>
+                    </source>
+                </outbound>
+            </attribute>
+
+            <attribute>
+                <ref>ri:cn</ref>
+                <displayName>Full Name</displayName>
+                <outbound>
+                    <source>
+                        <path>fullName</path>
+                    </source>
+                </outbound>
+            </attribute>
+
+            <attribute>
+                <ref>ri:sn</ref>
+                <displayName>Surname</displayName>
+                <outbound>
+                    <source>
+                        <path>familyName</path>
+                    </source>
+                </outbound>
+            </attribute>
+
+            <attribute>
+                <ref>ri:givenName</ref>
+                <displayName>Given Name</displayName>
+                <outbound>
+                    <source>
+                        <path>givenName</path>
+                    </source>
+                </outbound>
+            </attribute>
+
+            <attribute>
+                <ref>ri:mail</ref>
+                <displayName>Email Address</displayName>
+                <outbound>
+                    <source>
+                        <path>emailAddress</path>
+                    </source>
+                </outbound>
+            </attribute>
+
+            <credentials>
+                <password>
+                    <outbound/>
+                </password>
+            </credentials>
+        </objectType>
+    </schemaHandling>
 </resource>

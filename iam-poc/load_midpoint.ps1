@@ -275,6 +275,20 @@ if (Test-Path -Path "midpoint/user-template.xml") {
 # 7. Apply System Configuration Delta & Trigger User Recomputation
 # ==============================================================================
 
+$logOutput = docker logs iam-midpoint 2>&1 | Select-String -Pattern "initial password"
+if ($logOutput) {
+    $adminPassword = ($logOutput -split ":")[-1].Trim().Trim('"')
+} else {
+    $adminPassword = "5ecr3t" # Fallback if standard image is used
+}
+
+$midpointAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("Administrator:$adminPassword"))
+$authHeader = "Basic $midpointAuth"
+$mpHeaders = @{ 
+    "Authorization" = $authHeader
+    "Content-Type"  = "application/xml; charset=utf-8"
+}
+
 if (Test-Path -Path "midPoint/apply-user-template-delta.xml") {
     Write-Host "Applying Default User Template to System Configuration..." -ForegroundColor Yellow
     $deltaXml = Get-Content -Path "midPoint/apply-user-template-delta.xml" -Raw
