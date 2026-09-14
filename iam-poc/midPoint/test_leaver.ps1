@@ -1,7 +1,11 @@
 # ==============================================================================
 # test_leaver.ps1 - Offboarding & Deprovisioning Process
 # ==============================================================================
-$targetUsername = "devan.dev"
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$targetUsername
+)
 
 # ------------------------------------------------------------------------------
 # 1. Discover & Remove User in midPoint
