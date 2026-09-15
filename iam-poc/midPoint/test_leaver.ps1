@@ -48,7 +48,7 @@ if ($devanOid) {
 }
 
 # ------------------------------------------------------------------------------
-# 2. Revoke Keycloak Account & Session
+# 2. Revoke Keycloak Identity
 # ------------------------------------------------------------------------------
 Write-Host "`n--- Revoking Keycloak Identity ---" -ForegroundColor Cyan
 
@@ -57,18 +57,18 @@ try {
         -Method Post -Body @{ client_id = "admin-cli"; grant_type = "password"; username = "admin"; password = "admin" }
     $kcHeaders = @{ "Authorization" = "Bearer $($kcTokenResp.access_token)"; "Content-Type" = "application/json" }
 
-    $kcUser = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users?username=$targetUsername" -Method Get -Headers $kcHeaders
-    if ($kcUser -and $kcUser.Count -gt 0) {
-        $kcUserId = $kcUser[0].id
-        # Revoke active user sessions before deletion
-        try { Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users/$kcUserId/logout" -Method Post -Headers $kcHeaders } catch {}
-        $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users/$kcUserId" -Method Delete -Headers $kcHeaders
-        Write-Host "Deleted user '$targetUsername' from Keycloak." -ForegroundColor Green
+    # Array wrapper @(...) prevents PS 5.1 from unrolling single REST objects
+    $kcUsers = @(Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users?username=$targetUsername" -Method Get -Headers $kcHeaders)
+    $matchedKcUser = $kcUsers | Where-Object { $_.username -eq $targetUsername }
+
+    if ($matchedKcUser) {
+        Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users/$($matchedKcUser.id)" -Method Delete -Headers $kcHeaders
+        Write-Host "Successfully deleted Keycloak identity for '$targetUsername'." -ForegroundColor Green
     } else {
         Write-Host "User '$targetUsername' not found in Keycloak." -ForegroundColor Yellow
     }
 } catch {
-    Write-Host "Error during Keycloak cleanup: $_" -ForegroundColor Red
+    Write-Host "Failed to deprovision Keycloak user: $_" -ForegroundColor Red
 }
 
 # ------------------------------------------------------------------------------

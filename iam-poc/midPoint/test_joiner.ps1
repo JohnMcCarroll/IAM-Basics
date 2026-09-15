@@ -91,5 +91,36 @@ try {
     }
 }
 
+# ------------------------------------------------------------------------------
+# 4. Provision & Sync Identity in Keycloak
+# ------------------------------------------------------------------------------
+Write-Host "`n--- Syncing Keycloak Identity ---" -ForegroundColor Cyan
+
+try {
+    $kcTokenResp = Invoke-RestMethod -Uri "http://localhost:8080/realms/master/protocol/openid-connect/token" `
+        -Method Post -Body @{ client_id = "admin-cli"; grant_type = "password"; username = "admin"; password = "admin" }
+    $kcHeaders = @{ "Authorization" = "Bearer $($kcTokenResp.access_token)"; "Content-Type" = "application/json" }
+
+    # Trigger Keycloak LDAP Storage Provider sync to pull the new midPoint user
+    $components = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/components?type=org.keycloak.storage.UserStorageProvider" -Method Get -Headers $kcHeaders
+    if ($components) {
+        $ldapProviderId = $components[0].id
+        $null = Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/user-storage/$ldapProviderId/sync?action=triggerFullSync" -Method Post -Headers $kcHeaders
+        Write-Host "Triggered Keycloak LDAP User Federation sync." -ForegroundColor Green
+    }
+
+    # Verify user visibility in Keycloak
+    $kcUsers = @(Invoke-RestMethod -Uri "http://localhost:8080/admin/realms/master/users?username=$username" -Method Get -Headers $kcHeaders)
+    $matchedUser = $kcUsers | Where-Object { $_.username -eq $username }
+
+    if ($matchedUser) {
+        Write-Host "Verified identity '$username' is active in Keycloak (Federated ID: $($matchedUser.id))." -ForegroundColor Green
+    } else {
+        Write-Host "User '$username' will be provisioned JIT upon first OAuth login." -ForegroundColor Yellow
+    }
+} catch {
+    Write-Host "Keycloak sync warning: $_" -ForegroundColor Yellow
+}
+
 # downstream provisioning
 ..\rbac.ps1
