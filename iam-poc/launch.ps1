@@ -83,3 +83,6 @@ while (-not $ready) {
 .\rbac.ps1
 
 Write-Host (docker logs iam-midpoint 2>&1 | Select-String -Pattern "initial password")
+
+cd midPoint
+.\bot_listener.ps1

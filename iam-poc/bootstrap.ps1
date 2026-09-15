@@ -315,4 +315,72 @@ foreach ($hook in $hooks) {
     }
 }
 
+# ==============================================================================
+# setup_hr_bot_webhook.ps1 - Register IAM HR Bot Webhook in Rocket.Chat
+# ==============================================================================
+
+# 1. Authenticate with Rocket.Chat API
+$rcAdminPass = "AdminPassword123!"
+$rcAuth = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/login" `
+    -Method Post `
+    -ContentType "application/json" `
+    -Body (@{ user = "admin"; password = $rcAdminPass } | ConvertTo-Json)
+
+$passBytes = [System.Text.Encoding]::UTF8.GetBytes($rcAdminPass)
+$passHash  = -join ([System.Security.Cryptography.SHA256]::Create().ComputeHash($passBytes) | ForEach-Object { $_.ToString("x2") })
+
+$rcHeaders = @{
+    "X-Auth-Token" = $rcAuth.data.authToken
+    "X-User-Id"    = $rcAuth.data.userId
+    "X-2fa-Code"   = $passHash
+    "X-2fa-Method" = "password"
+    "Content-Type" = "application/json"
+}
+
+# 2. Define Webhook Configuration
+$iamHrHookJson = @"
+{
+    "type": "webhook-outgoing",
+    "name": "IAM HR Bot Hook",
+    "enabled": true,
+    "username": "admin",
+    "channel": "#hr",
+    "event": "sendMessage",
+    "triggerWords": ["!join", "!move", "!leave"],
+    "urls": ["http://host.docker.internal:5000/webhook/"],
+    "scriptEnabled": false
+}
+"@
+
+$hooks = @(
+    @{ Name = "IAM HR Bot Hook"; Json = $iamHrHookJson }
+)
+
+# 3. Query Existing Integrations
+try {
+    $existing = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/integrations.list" -Method Get -Headers $rcHeaders
+} catch {
+    $existing = $null
+}
+
+# 4. Remove Legacy Integrations and Register New Hook
+foreach ($hook in $hooks) {
+    $match = $existing.integrations | Where-Object { $_.name -eq $hook.Name }
+    if ($match) {
+        try {
+            $removeBody = @{ integrationId = $match._id; type = "webhook-outgoing" } | ConvertTo-Json
+            Invoke-RestMethod -Uri "http://localhost:4000/api/v1/integrations.remove" `
+                -Method Post -Headers $rcHeaders -ContentType "application/json" -Body $removeBody | Out-Null
+        } catch {}
+    }
+
+    try {
+        Invoke-RestMethod -Uri "http://localhost:4000/api/v1/integrations.create" `
+            -Method Post -Headers $rcHeaders -ContentType "application/json" -Body $hook.Json | Out-Null
+        Write-Host "Registered Rocket.Chat webhook: $($hook.Name)" -ForegroundColor Green
+    } catch {
+        Write-Host "Failed to register webhook $($hook.Name): $_" -ForegroundColor Red
+    }
+}
+
 Write-Host "`nEnvironment Bootstrap Complete!" -ForegroundColor Green

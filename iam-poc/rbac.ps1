@@ -145,25 +145,35 @@ try {
 
     $rcHeaders = @{
         "X-Auth-Token" = $rcAuth.data.authToken; "X-User-Id" = $rcAuth.data.userId
-        "X-2fa-Code" = $passHash; "X-2fa-Method" = "password"; "Content-Type" = "application/json"
+        "X-2fa-Code"   = $passHash; "X-2fa-Method" = "password"; "Content-Type" = "application/json"
     }
 
     $channelMap = @{}
     $privateChannels = @("trades", "trade-approvals", "hr", "dev", "managers")
+
     foreach ($chan in $privateChannels) {
+        # 1. Attempt to create as a Private Group
         try {
             $resp = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/groups.create" -Method Post -Headers $rcHeaders -Body (@{ name = $chan } | ConvertTo-Json)
-            $channelMap[$chan] = $resp.group._id
+            $channelMap[$chan] = @{ Id = $resp.group._id; IsPrivate = $true }
         } catch {
+            # 2. Query Private Groups first, fallback to Public Channels if missing
             try {
                 $info = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/groups.info?roomName=$chan" -Method Get -Headers $rcHeaders
-                $channelMap[$chan] = $info.group._id
-            } catch {}
+                $channelMap[$chan] = @{ Id = $info.group._id; IsPrivate = $true }
+            } catch {
+                try {
+                    $info = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/channels.info?roomName=$chan" -Method Get -Headers $rcHeaders
+                    $channelMap[$chan] = @{ Id = $info.channel._id; IsPrivate = $false }
+                } catch {}
+            }
         }
     }
+
+    # Handle #general (Always Public)
     try {
         $genInfo = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/channels.info?roomName=general" -Method Get -Headers $rcHeaders
-        $channelMap["general"] = $genInfo.channel._id
+        $channelMap["general"] = @{ Id = $genInfo.channel._id; IsPrivate = $false }
     } catch {}
 
     $existingRcUsers = (Invoke-RestMethod -Uri "http://localhost:4000/api/v1/users.list" -Method Get -Headers $rcHeaders).users
@@ -185,17 +195,19 @@ try {
         if (-not $rcUserId) { continue }
 
         foreach ($chanName in $accessMatrix[$u.Role].RCChannels) {
-            $roomId = $channelMap[$chanName]
-            if (-not $roomId) { continue }
-            $endpoint = if ($chanName -eq "general") { "channels.invite" } else { "groups.invite" }
+            $roomObj = $channelMap[$chanName]
+            if (-not $roomObj) { continue }
+
+            # Select correct endpoint based on channel metadata
+            $endpoint = if ($roomObj.IsPrivate) { "groups.invite" } else { "channels.invite" }
             try {
-                $null = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/$endpoint" -Method Post -Headers $rcHeaders -Body (@{ roomId = $roomId; userId = $rcUserId } | ConvertTo-Json)
+                $null = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/$endpoint" -Method Post -Headers $rcHeaders -Body (@{ roomId = $roomObj.Id; userId = $rcUserId } | ConvertTo-Json)
                 Write-Host "Added '$($u.Username)' to Rocket.Chat #$chanName" -ForegroundColor Green
             } catch {}
         }
     }
 
-    # RESTORED: Enable Rocket.Chat OAuth merge settings
+    # Enable Rocket.Chat OAuth merge settings
     function Set-RCSetting ($Name, $Val) {
         $key = "Accounts_OAuth_Custom-keycloak-$Name"
         try { $null = Invoke-RestMethod -Uri "http://localhost:4000/api/v1/settings/$key" -Method Post -Headers $rcHeaders -Body (@{ value = $Val } | ConvertTo-Json) } catch {}
